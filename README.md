@@ -16,9 +16,11 @@ en GHCR.
 
 - Docker con Compose v2.
 - No hace falta `docker login`: los paquetes son públicos.
-- Las imágenes publicadas hoy son **linux/amd64**. En Apple Silicon, Docker
-  Desktop las ejecuta por emulación (funciona, algo más lento). En hosts ARM
-  nativos habría que reconstruirlas con `buildx`.
+- El cliente `soupchef:0.3.0` es **multi-arch** (`linux/amd64` + `linux/arm64`):
+  en Apple Silicon corre nativo.
+- El gestor `soupdb:0.6.1` todavía se publica solo para `linux/amd64`; en Apple
+  Silicon Docker lo ejecuta por emulación (funciona, algo más lento) hasta que
+  salga su imagen multi-arch.
 
 ## Arrancar
 
@@ -112,7 +114,7 @@ docker compose up -d
 
 ## Estado de las imágenes
 
-- `ghcr.io/BD2-Project/soupdb:0.6.1` — pin explícito (el workflow publica por
-  tag; `latest` no es confiable).
+- `ghcr.io/BD2-Project/soupdb:0.6.1` — gestor; pin explícito (el workflow
+  publica por tag; `latest` no es confiable). Por ahora solo `linux/amd64`.
 - `ghcr.io/BD2-Project/soupchef:0.3.0` — cliente SSR con driver del protocolo
-  v1.1 en el servidor.
+  v1.1 en el servidor; multi-arch (`linux/amd64` + `linux/arm64`).
