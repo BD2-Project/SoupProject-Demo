@@ -8,9 +8,9 @@ en GHCR.
 
 | Servicio   | Imagen                                      | Puerto host | Qué hace |
 |------------|---------------------------------------------|-------------|----------|
-| `engine`   | `ghcr.io/BD2-Project/soupdb:0.6.1`         | `55432`     | Gestor SoupDB (protocolo binario v2) |
+| `engine`   | `ghcr.io/BD2-Project/soupdb:0.7.0`         | `55432`     | Gestor SoupDB (protocolo binario v2) |
 | `soupchef` | `ghcr.io/BD2-Project/soupchef:0.3.0`       | `8080`      | Cliente web SSR; el servidor Node habla TCP con el motor |
-| `seed`     | `ghcr.io/BD2-Project/soupdb:0.6.1`         | —           | Siembra idempotente de datos de ejemplo y termina |
+| `seed`     | `ghcr.io/BD2-Project/soupdb:0.7.0`         | —           | Siembra idempotente de datos de ejemplo y termina |
 | `plugins`  | `python:3.12-slim`                          | —           | Instala `soupdb-inverted` (y extras) desde PyPI y termina |
 
 ## Prerrequisitos
@@ -85,11 +85,15 @@ El servicio `plugins` instala los paquetes **desde PyPI** en el volumen
 sus entry points `soupdb.plugins`.
 
 - Por defecto se instala **`soupdb-inverted`** (full-text, ligero).
-- El **seed activa** el plugin en el primer arranque: registra `INVERTED` con
-  `storage_root=/app/data/plugins/inverted`, crea la tabla `docs`, siembra tres
-  filas y ejecuta `CREATE INDEX idx_docs ... USING INVERTED`. Ese `CREATE INDEX`
-  persiste la configuración en `SysPlugins`, así que el motor la reaplica solo
-  cada vez que abre la base (no hace falta reconfigurar nada).
+- El **seed activa** el plugin por SQL en el primer arranque:
+
+  ```sql
+  CREATE EXTENSION inverted WITH (storage_root = '/app/data/plugins/inverted');
+  ```
+
+  La sentencia persiste la configuración en `SysPlugins`, así que el motor la
+  reaplica solo cada vez que abre la base. Después crea la tabla `docs`, siembra
+  tres filas y ejecuta `CREATE INDEX idx_docs ... USING INVERTED`.
 - Verificación:
 
   ```bash
@@ -139,7 +143,7 @@ docker compose up -d
 
 ## Estado de las imágenes
 
-- `ghcr.io/BD2-Project/soupdb:0.6.1` — gestor; pin explícito por reproducibilidad.
+- `ghcr.io/BD2-Project/soupdb:0.7.0` — gestor; pin explícito por reproducibilidad.
   Manifiesto multi-arch (`linux/amd64` + `linux/arm64`); `latest` también se
   publica en cada release `v*`.
 - `ghcr.io/BD2-Project/soupchef:0.3.0` — cliente SSR con driver del protocolo
