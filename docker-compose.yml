@@ -12,6 +12,7 @@ services:
       HASH_GLOBAL_DEPTH_MAX: ${HASH_GLOBAL_DEPTH_MAX:-16}
       MAX_CONNECTIONS: ${MAX_CONNECTIONS:-100}
       LOCK_TIMEOUT_MS: ${LOCK_TIMEOUT_MS:-5000}
+      SOUPDB_PLUGIN_STORAGE: /app/data/plugins
     ports:
       - "${DRIVER_PORT:-55432}:55432"
     volumes:
@@ -73,8 +74,41 @@ services:
             execute_sql("INSERT INTO lugares (id, nombre, ubicacion) VALUES (3, 'Arequipa', POINT(-16.40, -71.54))", catalog)
             print("seed: tablas accounts y lugares creadas")
         catalog.close()
+
+        # Activacion de plugins (idempotente): registrar con config persistente
+        # y crear el indice, que es lo que persiste la fila en SysPlugins.
+        from engine.indexes.ranked_factory import DelegatingRankedFactory
+        from engine.plugins.registry import PluginRegistry
+
+        registry = PluginRegistry()
+        registry.discover()
+        if "INVERTED" in registry:
+            registry.register(
+                registry.plugin("INVERTED"),
+                {"storage_root": "/app/data/plugins/inverted"},
+                replace=True,
+            )
+            factory = DelegatingRankedFactory.from_registry(registry)
+            cat = Catalog("/app/data", ranked_factory=factory)
+            if "docs" not in cat.tables():
+                execute_sql("CREATE TABLE docs (id INT, contenido TEXT)", cat)
+                execute_sql("INSERT INTO docs VALUES (1, 'bases de datos espaciales')", cat)
+                execute_sql("INSERT INTO docs VALUES (2, 'indice invertido y busqueda de texto')", cat)
+                execute_sql("INSERT INTO docs VALUES (3, 'vectores y similitud coseno')", cat)
+            if cat.index_location("idx_docs") is None:
+                execute_sql("CREATE INDEX idx_docs ON docs (contenido) USING INVERTED", cat)
+                print("seed: plugin INVERTED activado e indice idx_docs creado")
+            else:
+                print("seed: plugin INVERTED ya activado")
+            cat.close()
+        else:
+            print("seed: plugin INVERTED no instalado; full-text desactivado")
     volumes:
       - engine-data:/app/data
+      - plugin-site:/opt/soupdb/plugin-site
+    depends_on:
+      plugins:
+        condition: service_completed_successfully
     restart: "no"
 
   # Cliente web SSR: el servidor Node habla el protocolo binario con el motor.

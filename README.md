@@ -81,29 +81,40 @@ SELECT id, titulo FROM papers WHERE INTERSECTS(pos, POLYGON(...));
 ## Plugins
 
 El servicio `plugins` instala los paquetes **desde PyPI** en el volumen
-`plugin-site` antes de que arranque el motor (requiere que las versiones estén
-publicadas; ver `plugins-release.yml` en el repo del gestor). El motor los descubre solo por
-sus entry points `soupdb.plugins` (no hace falta configurar nada).
+`plugin-site` antes de que arranque el motor. El motor los descubre solo por
+sus entry points `soupdb.plugins`.
 
 - Por defecto se instala **`soupdb-inverted`** (full-text, ligero).
-- Para habilitar también el vectorial (numpy/opencv/librosa, ~1 GB):
-
-  ```bash
-  SOUPDB_EXTRA_PLUGINS=soupdb-vector docker compose up -d
-  ```
-
+- El **seed activa** el plugin en el primer arranque: registra `INVERTED` con
+  `storage_root=/app/data/plugins/inverted`, crea la tabla `docs`, siembra tres
+  filas y ejecuta `CREATE INDEX idx_docs ... USING INVERTED`. Ese `CREATE INDEX`
+  persiste la configuración en `SysPlugins`, así que el motor la reaplica solo
+  cada vez que abre la base (no hace falta reconfigurar nada).
 - Verificación:
 
   ```bash
-  docker compose logs plugins   # lista el entry point INVERTED (y IVF/HNSW)
+  docker compose logs plugins   # lista el entry point INVERTED
+  docker compose logs seed      # "plugin INVERTED activado e indice idx_docs creado"
   ```
 
-Con los plugins activos se pueden usar las búsquedas del gestor:
+Búsqueda lista para probar desde el cliente web:
 
 ```sql
-CREATE INDEX idx ON papers (titulo) USING INVERTED;
-SELECT id, SCORE() FROM papers WHERE SEARCH(titulo, 'espaciales') USING INVERTED LIMIT 10;
+SELECT id, SCORE() FROM docs WHERE SEARCH(contenido, 'espaciales') USING INVERTED LIMIT 10;
 ```
+
+### Vectorial (opcional, activación manual)
+
+Se instala con:
+
+```bash
+SOUPDB_EXTRA_PLUGINS=soupdb-vector docker compose up -d
+```
+
+Sus entry points (`IVF`, `HNSW`) quedan visibles, pero **no se activan solos**:
+crear un índice vectorial requiere un codebook/perfil entrenado sobre un dataset
+multimedia. Ese flujo queda fuera de la demo; ver `docs/plugins.md` y
+`docs/vectores.md` del repositorio del gestor.
 
 ## Persistencia y reinicio
 
