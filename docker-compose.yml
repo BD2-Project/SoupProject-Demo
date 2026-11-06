@@ -46,7 +46,7 @@ services:
       - |
         pip install --no-cache-dir --target /opt/soupdb/plugin-site \
           soupdb-inverted ${SOUPDB_EXTRA_PLUGINS:-}
-        python -c "import importlib.metadata as m; print('plugins:', [e.name for e in m.entry_points(group='soupdb.plugins')])"
+        PYTHONPATH=/opt/soupdb/plugin-site python -c "import importlib.metadata as m; print('plugins:', [e.name for e in m.entry_points(group='soupdb.plugins')])"
     volumes:
       - plugin-site:/opt/soupdb/plugin-site
     restart: "no"
