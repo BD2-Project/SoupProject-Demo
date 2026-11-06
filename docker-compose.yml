@@ -1,0 +1,50 @@
+services:
+  engine:
+    # Versión fijada a propósito: el workflow publica por tag y no garantiza `latest`.
+    image: ghcr.io/BD2-Project/soupdb:v0.6.1
+    environment:
+      PAGE_SIZE: ${PAGE_SIZE:-4096}
+      BUFFER_POOL_SIZE: ${BUFFER_POOL_SIZE:-1024}
+      REORG_THRESHOLD: ${REORG_THRESHOLD:-0.3}
+      BPLUS_ORDER: ${BPLUS_ORDER:-4}
+      HASH_GLOBAL_DEPTH_MAX: ${HASH_GLOBAL_DEPTH_MAX:-16}
+      MAX_CONNECTIONS: ${MAX_CONNECTIONS:-100}
+      LOCK_TIMEOUT_MS: ${LOCK_TIMEOUT_MS:-5000}
+      # Wheels de plugins montados en ./plugins (opcional).
+      SOUPDB_PLUGINS: ${SOUPDB_PLUGINS:-0}
+      SOUPDB_PLUGINS_DIR: /opt/soupdb/plugins
+    ports:
+      - "${DRIVER_PORT:-55432}:55432"
+    volumes:
+      - engine-data:/app/data
+      - ./plugins:/opt/soupdb/plugins:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; s=socket.create_connection(('127.0.0.1', 55432), 2); s.close()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # El cliente web SSR (SoupChef) se agrega cuando su imagen esté publicada
+  # (Plan C). Por ahora la demo expone el gestor en el puerto 55432 para
+  # conectarse con rsoup/soup_tui.
+  #
+  # soupchef:
+  #   image: ghcr.io/BD2-Project/soupchef:v0.3.0
+  #   ports:
+  #     - "8080:3000"
+  #   depends_on:
+  #     engine:
+  #       condition: service_healthy
+  #   environment:
+  #     SOUPDB_HOST: engine
+  #     SOUPDB_PORT: 55432
+
+volumes:
+  engine-data:
