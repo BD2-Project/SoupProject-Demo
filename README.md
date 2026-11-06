@@ -1,20 +1,24 @@
 # SoupProject Demo
 
-Demo mínima del gestor **SoupDB** usando la imagen publicada en GHCR.
+Demo dockerizada de **SoupDB**: gestor + cliente web **SoupChef** (SSR) listos
+para usarse con un solo comando. Las imágenes están publicadas y son públicas
+en GHCR.
+
+## Servicios
+
+| Servicio   | Imagen                                      | Puerto host | Qué hace |
+|------------|---------------------------------------------|-------------|----------|
+| `engine`   | `ghcr.io/BD2-Project/soupdb:0.6.1`         | `55432`     | Gestor SoupDB (protocolo binario v1.1) |
+| `soupchef` | `ghcr.io/BD2-Project/soupchef:0.3.0`       | `8080`      | Cliente web SSR; el servidor Node habla TCP con el motor |
+| `seed`     | `ghcr.io/BD2-Project/soupdb:0.6.1`         | —           | Siembra idempotente de datos de ejemplo y termina |
 
 ## Prerrequisitos
 
 - Docker con Compose v2.
-- Acceso al paquete GHCR. **El paquete es privado**, así que hay que autenticarse
-  una vez:
-
-  ```bash
-  echo "$GITHUB_TOKEN" | docker login ghcr.io -u <tu-usuario> --password-stdin
-  ```
-
-  > Alternativa para la demo pública: hacer visible el paquete
-  > `ghcr.io/bd2-project/soupdb` desde Settings de la organización (Opción A del
-  > Plan A). Mientras siga privado, el `docker login` es obligatorio.
+- No hace falta `docker login`: los paquetes son públicos.
+- Las imágenes publicadas hoy son **linux/amd64**. En Apple Silicon, Docker
+  Desktop las ejecuta por emulación (funciona, algo más lento). En hosts ARM
+  nativos habría que reconstruirlas con `buildx`.
 
 ## Arrancar
 
@@ -23,30 +27,55 @@ docker compose pull
 docker compose up -d
 ```
 
-El gestor queda escuchando en `127.0.0.1:55432` (protocolo binario de SoupDB).
-Los datos persisten en el volumen `engine-data`.
+- Cliente web: <http://localhost:8080>
+- Gestor (protocolo binario): `127.0.0.1:55432`
 
-## Smoke test
+El arranque sigue este orden: `seed` → `engine` (healthy) → `soupchef`.
+La primera vez se crean las tablas `accounts` y `lugares` con datos de ejemplo;
+en arranques posteriores el seed detecta los datos y no hace nada.
 
-Con el repositorio `rsoup` a mano:
+## Verificación rápida
 
 ```bash
-cargo run --bin soup_tui -- --scenario ping
+docker compose ps                 # engine/soupchef healthy; seed exited (0)
+docker compose logs seed          # "seed: tablas accounts y lugares creadas"
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/   # 200
+```
+
+## Datos de ejemplo
+
+```sql
+SELECT * FROM accounts;          -- (1, 100), (2, 200)
+SELECT id, nombre FROM lugares;  -- Lima, Cusco, Arequipa
+```
+
+## Smoke test del gestor
+
+Con el repositorio [`rsoup`](https://github.com/BD2-Project/rsoup) a mano:
+
+```bash
+cargo run --bin soup_tui -- --host 127.0.0.1 --port 55432 --scenario ping
 ```
 
 El escenario `ping` abre una conexión TCP, hace heartbeat y sale con código 0.
-Escenarios disponibles: `ping`, `select`, `commit`, `rollback`, `error`,
-`spatial`, `prepared`, `vector` (los de v1.1 requieren `RSOUP_E2E_V11=true`).
+Otros escenarios: `select`, `commit`, `rollback`, `error`, `spatial`,
+`prepared`, `vector`.
+
+Para la TUI interactiva:
+
+```bash
+cargo run --bin soup_tui
+```
 
 ## Consultas de ejemplo
 
-Una vez conectado con `soup_tui` (TUI interactiva) o con el cliente SSR:
+Desde el cliente web o con `soup_tui`:
 
 ```sql
 CREATE TABLE papers (id INT PRIMARY KEY, titulo TEXT, pos POINT);
 INSERT INTO papers VALUES (1, 'Bases de datos espaciales', POINT(-12.05, -77.04));
+SELECT id, titulo FROM papers;
 SELECT id, titulo FROM papers WHERE INTERSECTS(pos, POLYGON(...));
-SELECT id, titulo FROM papers WHERE SEARCH(titulo, 'espaciales') USING INVERTED LIMIT 10;
 ```
 
 ## Plugins (opcional)
@@ -60,8 +89,30 @@ mkdir -p plugins
 SOUPDB_PLUGINS=1 docker compose up -d
 ```
 
-## Estado
+## Persistencia y reinicio
 
-- `engine`: imagen `ghcr.io/BD2-Project/soupdb:v0.6.1` (pin explícito).
-- `soupchef`: pendiente de la imagen SSR (Plan C); el servicio está comentado en
-  el compose.
+Los datos viven en el volumen `engine-data`. Para empezar de cero:
+
+```bash
+docker compose down -v
+docker compose up -d
+```
+
+## Variables de entorno
+
+| Variable | Default | Descripción |
+|----------|---------|-------------|
+| `DRIVER_PORT` | `55432` | Puerto host del gestor |
+| `SOUPCHEF_PORT` | `8080` | Puerto host del cliente web |
+| `SOUPDB_WIRE_VERSION` | `2` | Versión del protocolo que usa el cliente |
+| `SOUPDB_TIMEOUT_MS` | `15000` | Timeout de conexión del cliente |
+| `MAX_CONNECTIONS` | `100` | Conexiones simultáneas del gestor |
+| `PAGE_SIZE` | `4096` | Tamaño de página del motor |
+| `BUFFER_POOL_SIZE` | `1024` | Páginas en el buffer pool |
+
+## Estado de las imágenes
+
+- `ghcr.io/BD2-Project/soupdb:0.6.1` — pin explícito (el workflow publica por
+  tag; `latest` no es confiable).
+- `ghcr.io/BD2-Project/soupchef:0.3.0` — cliente SSR con driver del protocolo
+  v1.1 en el servidor.

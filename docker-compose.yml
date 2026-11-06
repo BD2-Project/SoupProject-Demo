@@ -1,7 +1,9 @@
+name: soupdb-demo
+
 services:
   engine:
     # Versión fijada a propósito: el workflow publica por tag y no garantiza `latest`.
-    image: ghcr.io/BD2-Project/soupdb:v0.6.1
+    image: ghcr.io/BD2-Project/soupdb:0.6.1
     environment:
       PAGE_SIZE: ${PAGE_SIZE:-4096}
       BUFFER_POOL_SIZE: ${BUFFER_POOL_SIZE:-1024}
@@ -18,6 +20,9 @@ services:
     volumes:
       - engine-data:/app/data
       - ./plugins:/opt/soupdb/plugins:ro
+    depends_on:
+      seed:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -31,20 +36,58 @@ services:
       retries: 5
       start_period: 5s
 
-  # El cliente web SSR (SoupChef) se agrega cuando su imagen esté publicada
-  # (Plan C). Por ahora la demo expone el gestor en el puerto 55432 para
-  # conectarse con rsoup/soup_tui.
-  #
-  # soupchef:
-  #   image: ghcr.io/BD2-Project/soupchef:v0.3.0
-  #   ports:
-  #     - "8080:3000"
-  #   depends_on:
-  #     engine:
-  #       condition: service_healthy
-  #   environment:
-  #     SOUPDB_HOST: engine
-  #     SOUPDB_PORT: 55432
+  # Siembra idempotente de datos de ejemplo antes de que arranque el motor.
+  # Usa la misma imagen del gestor y escribe en el volumen compartido.
+  seed:
+    image: ghcr.io/BD2-Project/soupdb:0.6.1
+    entrypoint: ["python", "-c"]
+    command:
+      - |
+        from engine.common.catalog import Catalog
+        from engine.query import execute_sql
+
+        catalog = Catalog("/app/data")
+        if "accounts" in catalog.tables():
+            print("seed: la base ya tiene datos, nada que hacer")
+        else:
+            execute_sql("CREATE TABLE accounts (id INT, balance INT)", catalog)
+            execute_sql("INSERT INTO accounts VALUES (1, 100)", catalog)
+            execute_sql("INSERT INTO accounts VALUES (2, 200)", catalog)
+            execute_sql("CREATE TABLE lugares (id INT, nombre TEXT, ubicacion POINT)", catalog)
+            execute_sql("INSERT INTO lugares (id, nombre, ubicacion) VALUES (1, 'Lima', POINT(-12.04, -77.03))", catalog)
+            execute_sql("INSERT INTO lugares (id, nombre, ubicacion) VALUES (2, 'Cusco', POINT(-13.52, -71.97))", catalog)
+            execute_sql("INSERT INTO lugares (id, nombre, ubicacion) VALUES (3, 'Arequipa', POINT(-16.40, -71.54))", catalog)
+            print("seed: tablas accounts y lugares creadas")
+        catalog.close()
+    volumes:
+      - engine-data:/app/data
+    restart: "no"
+
+  # Cliente web SSR: el servidor Node habla el protocolo binario con el motor.
+  soupchef:
+    image: ghcr.io/BD2-Project/soupchef:0.3.0
+    ports:
+      - "${SOUPCHEF_PORT:-8080}:3000"
+    environment:
+      SOUPDB_HOST: engine
+      SOUPDB_PORT: 55432
+      SOUPDB_WIRE_VERSION: ${SOUPDB_WIRE_VERSION:-2}
+      SOUPDB_TIMEOUT_MS: ${SOUPDB_TIMEOUT_MS:-15000}
+    depends_on:
+      engine:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const n=require('net');const s=n.connect(3000,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
 volumes:
   engine-data:
