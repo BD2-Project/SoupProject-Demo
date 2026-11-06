@@ -3,7 +3,7 @@ name: soupdb-demo
 services:
   engine:
     # Pin explícito por reproducibilidad; el manifiesto es multi-arch.
-    image: ghcr.io/BD2-Project/soupdb:0.6.1
+    image: ghcr.io/BD2-Project/soupdb:0.7.0
     environment:
       PAGE_SIZE: ${PAGE_SIZE:-4096}
       BUFFER_POOL_SIZE: ${BUFFER_POOL_SIZE:-1024}
@@ -54,7 +54,7 @@ services:
   # Siembra idempotente de datos de ejemplo antes de que arranque el motor.
   # Usa la misma imagen del gestor y escribe en el volumen compartido.
   seed:
-    image: ghcr.io/BD2-Project/soupdb:0.6.1
+    image: ghcr.io/BD2-Project/soupdb:0.7.0
     entrypoint: ["python", "-c"]
     command:
       - |
@@ -75,34 +75,24 @@ services:
             print("seed: tablas accounts y lugares creadas")
         catalog.close()
 
-        # Activacion de plugins (idempotente): registrar con config persistente
-        # y crear el indice, que es lo que persiste la fila en SysPlugins.
-        from engine.indexes.ranked_factory import DelegatingRankedFactory
-        from engine.plugins.registry import PluginRegistry
-
-        registry = PluginRegistry()
-        registry.discover()
-        if "INVERTED" in registry:
-            registry.register(
-                registry.plugin("INVERTED"),
-                {"storage_root": "/app/data/plugins/inverted"},
-                replace=True,
-            )
-            factory = DelegatingRankedFactory.from_registry(registry)
-            cat = Catalog("/app/data", ranked_factory=factory)
-            if "docs" not in cat.tables():
-                execute_sql("CREATE TABLE docs (id INT, contenido TEXT)", cat)
-                execute_sql("INSERT INTO docs VALUES (1, 'bases de datos espaciales')", cat)
-                execute_sql("INSERT INTO docs VALUES (2, 'indice invertido y busqueda de texto')", cat)
-                execute_sql("INSERT INTO docs VALUES (3, 'vectores y similitud coseno')", cat)
-            if cat.index_location("idx_docs") is None:
-                execute_sql("CREATE INDEX idx_docs ON docs (contenido) USING INVERTED", cat)
-                print("seed: plugin INVERTED activado e indice idx_docs creado")
-            else:
-                print("seed: plugin INVERTED ya activado")
-            cat.close()
+        # Activacion por SQL (equivalente a CREATE EXTENSION de Postgres):
+        # persiste la config en SysPlugins y el motor la reaplica al abrir.
+        cat = Catalog("/app/data")
+        execute_sql(
+            "CREATE EXTENSION inverted WITH (storage_root = '/app/data/plugins/inverted')",
+            cat,
+        )
+        if "docs" not in cat.tables():
+            execute_sql("CREATE TABLE docs (id INT, contenido TEXT)", cat)
+            execute_sql("INSERT INTO docs VALUES (1, 'bases de datos espaciales')", cat)
+            execute_sql("INSERT INTO docs VALUES (2, 'indice invertido y busqueda de texto')", cat)
+            execute_sql("INSERT INTO docs VALUES (3, 'vectores y similitud coseno')", cat)
+        if cat.index_location("idx_docs") is None:
+            execute_sql("CREATE INDEX idx_docs ON docs (contenido) USING INVERTED", cat)
+            print("seed: plugin INVERTED activado e indice idx_docs creado")
         else:
-            print("seed: plugin INVERTED no instalado; full-text desactivado")
+            print("seed: plugin INVERTED ya activado")
+        cat.close()
     volumes:
       - engine-data:/app/data
       - plugin-site:/opt/soupdb/plugin-site
