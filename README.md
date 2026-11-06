@@ -8,7 +8,7 @@ en GHCR.
 
 | Servicio   | Imagen                                      | Puerto host | Qué hace |
 |------------|---------------------------------------------|-------------|----------|
-| `engine`   | `ghcr.io/BD2-Project/soupdb:0.6.1`         | `55432`     | Gestor SoupDB (protocolo binario v1.1) |
+| `engine`   | `ghcr.io/BD2-Project/soupdb:0.6.1`         | `55432`     | Gestor SoupDB (protocolo binario v2) |
 | `soupchef` | `ghcr.io/BD2-Project/soupchef:0.3.0`       | `8080`      | Cliente web SSR; el servidor Node habla TCP con el motor |
 | `seed`     | `ghcr.io/BD2-Project/soupdb:0.6.1`         | —           | Siembra idempotente de datos de ejemplo y termina |
 
@@ -16,11 +16,8 @@ en GHCR.
 
 - Docker con Compose v2.
 - No hace falta `docker login`: los paquetes son públicos.
-- El cliente `soupchef:0.3.0` es **multi-arch** (`linux/amd64` + `linux/arm64`):
-  en Apple Silicon corre nativo.
-- El gestor `soupdb:0.6.1` todavía se publica solo para `linux/amd64`; en Apple
-  Silicon Docker lo ejecuta por emulación (funciona, algo más lento) hasta que
-  salga su imagen multi-arch.
+- Ambas imágenes son **multi-arch** (`linux/amd64` + `linux/arm64`): en Apple
+  Silicon Docker descarga la variante **arm64 nativa**, sin emulación.
 
 ## Arrancar
 
@@ -114,7 +111,8 @@ docker compose up -d
 
 ## Estado de las imágenes
 
-- `ghcr.io/BD2-Project/soupdb:0.6.1` — gestor; pin explícito (el workflow
-  publica por tag; `latest` no es confiable). Por ahora solo `linux/amd64`.
+- `ghcr.io/BD2-Project/soupdb:0.6.1` — gestor; pin explícito por reproducibilidad.
+  Manifiesto multi-arch (`linux/amd64` + `linux/arm64`); `latest` también se
+  publica en cada release `v*`.
 - `ghcr.io/BD2-Project/soupchef:0.3.0` — cliente SSR con driver del protocolo
   v1.1 en el servidor; multi-arch (`linux/amd64` + `linux/arm64`).
