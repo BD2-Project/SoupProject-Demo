@@ -10,8 +10,9 @@ en GHCR.
 |------------|---------------------------------------------|-------------|----------|
 | `engine`   | `ghcr.io/bd2-project/soupdb:0.7.1`         | `55432`     | Gestor SoupDB (protocolo binario v2) |
 | `soupchef` | `ghcr.io/bd2-project/soupchef:0.3.0`       | `8080`      | Cliente web SSR; el servidor Node habla TCP con el motor |
-| `seed`     | `ghcr.io/bd2-project/soupdb:0.7.1`         | —           | Siembra datos y activa INVERTED (+ IVF/HNSW si están instalados) |
-| `plugins`  | `python:3.12-slim`                          | —           | Instala plugins desde PyPI (`soupdb-inverted` + extras) |
+| `seed`     | `ghcr.io/bd2-project/soupdb:0.7.1`         | —           | Siembra datos y activa INVERTED + IVF + HNSW |
+| `plugins`  | `python:3.12-slim`                          | —           | Instala todos los plugins desde PyPI (`soupdb-inverted` + `soupdb-vector`) |
+| `vector-dataset` | `python:3.12-slim`                    | —           | Genera 40 imágenes sintéticas y entrena el codebook (K=16) |
 
 ## Prerrequisitos
 
@@ -95,28 +96,54 @@ El servicio `plugins` instala los paquetes **desde PyPI** en el volumen
 `plugin-site` antes de que arranque el motor. El motor los descubre solo por
 sus entry points `soupdb.plugins`.
 
-- Por defecto se instala **`soupdb-inverted`** (full-text, ligero).
-- El **seed activa** los plugins por SQL en el primer arranque (idempotente):
+Se instalan **todos los plugins por defecto**: `soupdb-inverted` (texto) y
+`soupdb-vector` (IVF/HNSW). `SOUPDB_EXTRA_PLUGINS` permite sumar más paquetes.
 
-  ```sql
-  CREATE EXTENSION inverted WITH (storage_root = '/app/data/plugins/inverted');
-  ```
-
-  La sentencia persiste la configuración en `SysPlugins`, así que el motor la
-  reaplica solo cada vez que abre la base. Después crea la tabla `docs`, siembra
-  tres filas y ejecuta `CREATE INDEX idx_docs ... USING INVERTED`.
-- Verificación:
-
-  ```bash
-  docker compose logs plugins   # entry points instalados
-  docker compose logs seed      # "plugin INVERTED activado e indice idx_docs creado"
-  ```
-
-Búsqueda lista para probar desde el cliente web:
+El **seed activa** las extensiones por SQL en el primer arranque (idempotente):
 
 ```sql
-SELECT id, SCORE() AS score FROM docs WHERE SEARCH(contenido, 'espaciales') USING INVERTED LIMIT 10;
+CREATE EXTENSION inverted WITH (storage_root = '/app/data/plugins/inverted');
+CREATE EXTENSION ivf  WITH (storage_root = '/app/data/plugins/vector',
+  profiles = '{"img-v1": {"kind": "image", "root": "/app/data/vector-dataset/img",
+                          "codebook": "/app/data/vector-dataset/codebook.npz"}}');
+CREATE EXTENSION hnsw WITH (storage_root = '/app/data/plugins/vector', profiles = '...');
 ```
+
+La configuración queda en `SysPlugins` y el motor la reaplica al abrir.
+
+- **Texto**: `docs` + índice `idx_docs USING INVERTED`.
+- **Vectorial**: el servicio `vector-dataset` genera 40 imágenes sintéticas,
+  entrena un codebook K=16 y el seed crea `imagenes` con dos índices
+  (`idx_img_ivf` y `idx_img_hnsw`).
+
+Verificación:
+
+```bash
+docker compose logs plugins        # entry points: hnsw, inverted, ivf
+docker compose logs vector-dataset # "40 imagenes sinteticas creadas"
+docker compose logs seed           # indices de texto y vectoriales creados
+```
+
+Consultas listas para probar desde el cliente web:
+
+```sql
+-- texto (full-text)
+SELECT id, SCORE() AS score FROM docs
+WHERE SEARCH(contenido, 'espaciales') USING INVERTED LIMIT 10;
+
+-- vectorial (similitud de imágenes; las rutas son relativas al dataset)
+SELECT id, archivo, SCORE() AS score FROM imagenes
+WHERE SEARCH(archivo, 'img_000.png') USING IVF WITH (metric = 'cosine', k = 5)
+ORDER BY score DESC;
+
+SELECT id, archivo, SCORE() AS score FROM imagenes
+WHERE SEARCH(archivo, 'img_000.png') USING HNSW WITH (metric = 'cosine', k = 5)
+ORDER BY score DESC;
+```
+
+Para usar un dataset real, monta tus imágenes/codebook en el volumen
+`engine-data` (o un bind mount) y ajusta `root`/`codebook` en el `profiles` del
+`CREATE EXTENSION`; el resto del flujo es idéntico.
 
 ### Vectorial (IVF/HNSW)
 

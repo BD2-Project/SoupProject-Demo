@@ -37,18 +37,68 @@ services:
       start_period: 5s
 
   # Instala los plugins desde PyPI en un volumen compartido.
-  # Por defecto solo el full-text (ligero); el vectorial es opcional y pesado:
-  #   SOUPDB_EXTRA_PLUGINS=soupdb-vector docker compose up -d
+  # Instala todos los plugins del gestor (full-text + vectorial).
+  # SOUPDB_EXTRA_PLUGINS permite sumar paquetes adicionales.
   plugins:
     image: python:3.12-slim
     entrypoint: ["sh", "-c"]
     command:
       - |
         pip install --no-cache-dir --target /opt/soupdb/plugin-site \
-          soupdb-inverted ${SOUPDB_EXTRA_PLUGINS:-}
+          soupdb-inverted soupdb-vector ${SOUPDB_EXTRA_PLUGINS:-}
         PYTHONPATH=/opt/soupdb/plugin-site python -c "import importlib.metadata as m; print('plugins:', [e.name for e in m.entry_points(group='soupdb.plugins')])"
     volumes:
       - plugin-site:/opt/soupdb/plugin-site
+    restart: "no"
+
+  # Genera un dataset sintetico de imagenes y entrena el codebook de la demo
+  # vectorial. Es idempotente: si el codebook ya existe, no hace nada.
+  vector-dataset:
+    image: python:3.12-slim
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        export PYTHONPATH=/opt/soupdb/plugin-site
+        if [ -f /app/data/vector-dataset/codebook.npz ]; then
+          echo "vector-dataset: ya existe; nada que hacer"
+          exit 0
+        fi
+        python - <<'PY2'
+        import os
+
+        import cv2
+        import numpy as np
+
+        rng = np.random.default_rng(11)
+        root = "/app/data/vector-dataset/img"
+        os.makedirs(root, exist_ok=True)
+        for i in range(40):
+            image = rng.integers(0, 255, (256, 256, 3), dtype=np.uint8)
+            cv2.circle(
+                image,
+                (int(rng.integers(20, 236)), int(rng.integers(20, 236))),
+                int(rng.integers(10, 60)),
+                (0, 255, 0),
+                -1,
+            )
+            cv2.rectangle(
+                image,
+                (int(rng.integers(0, 200)), int(rng.integers(0, 200))),
+                (int(rng.integers(50, 250)), int(rng.integers(50, 250))),
+                (255, 0, 0),
+                3,
+            )
+            cv2.imwrite(os.path.join(root, f"img_{i:03d}.png"), image)
+        print("vector-dataset: 40 imagenes sinteticas creadas")
+        PY2
+        python -m soupdb_vector.multimedia.manifest image /app/data/vector-dataset/img /app/data/vector-dataset/manifest.jsonl --limit 40
+        python -m soupdb_vector.multimedia.build_vectors /app/data/vector-dataset/manifest.jsonl /app/data/vector-dataset/img /app/data/vector-dataset/cache /app/data/vector-dataset/codebook.npz /app/data/vector-dataset/vectores.bin --k 16 --max-descriptors 5000
+    volumes:
+      - engine-data:/app/data
+      - plugin-site:/opt/soupdb/plugin-site:ro
+    depends_on:
+      plugins:
+        condition: service_completed_successfully
     restart: "no"
 
   # Siembra idempotente de datos de ejemplo antes de que arranque el motor.
@@ -59,6 +109,8 @@ services:
     command:
       - |
         import importlib.metadata as md
+        import json
+        from pathlib import Path
 
         from engine.common.catalog import Catalog
         from engine.query import execute_sql
@@ -87,21 +139,51 @@ services:
                 cat,
             )
         installed = {ep.name for ep in md.entry_points(group="soupdb.plugins")}
-        if {"ivf", "hnsw"} <= installed:
-            # Misma config para ambos: comparten el vectorizer (v0.7.1+).
+        manifest_path = Path("/app/data/vector-dataset/manifest.jsonl")
+        codebook_path = Path("/app/data/vector-dataset/codebook.npz")
+        if {"ivf", "hnsw"} <= installed and manifest_path.exists() and codebook_path.exists():
+            profiles = json.dumps(
+                {
+                    "img-v1": {
+                        "kind": "image",
+                        "root": "/app/data/vector-dataset/img",
+                        "codebook": str(codebook_path),
+                    }
+                }
+            )
+            vector_config = (
+                "storage_root = '/app/data/plugins/vector', "
+                f"profiles = '{profiles}'"
+            )
             if "IVF" not in active:
-                execute_sql(
-                    "CREATE EXTENSION ivf WITH (storage_root = '/app/data/plugins/vector')",
-                    cat,
-                )
+                execute_sql(f"CREATE EXTENSION ivf WITH ({vector_config})", cat)
             if "HNSW" not in active:
+                execute_sql(f"CREATE EXTENSION hnsw WITH ({vector_config})", cat)
+            if "imagenes" not in cat.tables():
+                execute_sql("CREATE TABLE imagenes (id INT PRIMARY KEY, archivo TEXT)", cat)
+                paths = [
+                    json.loads(line)["path"]
+                    for line in manifest_path.read_text().splitlines()
+                    if line.strip()
+                ]
+                for ident, path in enumerate(paths, start=1):
+                    execute_sql(f"INSERT INTO imagenes VALUES ({ident}, '{path}')", cat)
+            if cat.index_location("idx_img_ivf") is None:
                 execute_sql(
-                    "CREATE EXTENSION hnsw WITH (storage_root = '/app/data/plugins/vector')",
+                    "CREATE INDEX idx_img_ivf ON imagenes (archivo) USING IVF "
+                    "WITH (metric = 'cosine', dimension = 16, profile = 'img-v1')",
                     cat,
                 )
-            print("seed: extensiones vectoriales IVF/HNSW activadas")
+                print("seed: indice vectorial IVF creado")
+            if cat.index_location("idx_img_hnsw") is None:
+                execute_sql(
+                    "CREATE INDEX idx_img_hnsw ON imagenes (archivo) USING HNSW "
+                    "WITH (metric = 'cosine', dimension = 16, profile = 'img-v1')",
+                    cat,
+                )
+                print("seed: indice vectorial HNSW creado")
         else:
-            print("seed: soupdb-vector no instalado; se omite IVF/HNSW")
+            print("seed: dataset/codebook vectorial no disponible; se omite la demo vectorial")
         if "docs" not in cat.tables():
             execute_sql("CREATE TABLE docs (id INT, contenido TEXT)", cat)
             execute_sql("INSERT INTO docs VALUES (1, 'bases de datos espaciales')", cat)
@@ -118,6 +200,8 @@ services:
       - plugin-site:/opt/soupdb/plugin-site
     depends_on:
       plugins:
+        condition: service_completed_successfully
+      vector-dataset:
         condition: service_completed_successfully
     restart: "no"
 
