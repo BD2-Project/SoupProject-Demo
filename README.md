@@ -100,7 +100,7 @@ sus entry points `soupdb.plugins`.
 Búsqueda lista para probar desde el cliente web:
 
 ```sql
-SELECT id, SCORE() FROM docs WHERE SEARCH(contenido, 'espaciales') USING INVERTED LIMIT 10;
+SELECT id, SCORE() AS score FROM docs WHERE SEARCH(contenido, 'espaciales') USING INVERTED LIMIT 10;
 ```
 
 ### Vectorial (opcional, activación manual)
