@@ -12,15 +12,14 @@ services:
       HASH_GLOBAL_DEPTH_MAX: ${HASH_GLOBAL_DEPTH_MAX:-16}
       MAX_CONNECTIONS: ${MAX_CONNECTIONS:-100}
       LOCK_TIMEOUT_MS: ${LOCK_TIMEOUT_MS:-5000}
-      # Wheels de plugins montados en ./plugins (opcional).
-      SOUPDB_PLUGINS: ${SOUPDB_PLUGINS:-0}
-      SOUPDB_PLUGINS_DIR: /opt/soupdb/plugins
     ports:
       - "${DRIVER_PORT:-55432}:55432"
     volumes:
       - engine-data:/app/data
-      - ./plugins:/opt/soupdb/plugins:ro
+      - plugin-site:/opt/soupdb/plugin-site:ro
     depends_on:
+      plugins:
+        condition: service_completed_successfully
       seed:
         condition: service_completed_successfully
     healthcheck:
@@ -35,6 +34,21 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
+
+  # Instala los plugins desde PyPI en un volumen compartido.
+  # Por defecto solo el full-text (ligero); el vectorial es opcional y pesado:
+  #   SOUPDB_EXTRA_PLUGINS=soupdb-vector docker compose up -d
+  plugins:
+    image: python:3.12-slim
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        pip install --no-cache-dir --target /opt/soupdb/plugin-site \
+          soupdb-inverted ${SOUPDB_EXTRA_PLUGINS:-}
+        python -c "import importlib.metadata as m; print('plugins:', [e.name for e in m.entry_points(group='soupdb.plugins')])"
+    volumes:
+      - plugin-site:/opt/soupdb/plugin-site
+    restart: "no"
 
   # Siembra idempotente de datos de ejemplo antes de que arranque el motor.
   # Usa la misma imagen del gestor y escribe en el volumen compartido.
@@ -91,3 +105,4 @@ services:
 
 volumes:
   engine-data:
+  plugin-site:

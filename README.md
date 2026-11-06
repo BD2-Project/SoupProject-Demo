@@ -11,6 +11,7 @@ en GHCR.
 | `engine`   | `ghcr.io/BD2-Project/soupdb:0.6.1`         | `55432`     | Gestor SoupDB (protocolo binario v2) |
 | `soupchef` | `ghcr.io/BD2-Project/soupchef:0.3.0`       | `8080`      | Cliente web SSR; el servidor Node habla TCP con el motor |
 | `seed`     | `ghcr.io/BD2-Project/soupdb:0.6.1`         | —           | Siembra idempotente de datos de ejemplo y termina |
+| `plugins`  | `python:3.12-slim`                          | —           | Instala `soupdb-inverted` (y extras) desde PyPI y termina |
 
 ## Prerrequisitos
 
@@ -77,15 +78,31 @@ SELECT id, titulo FROM papers;
 SELECT id, titulo FROM papers WHERE INTERSECTS(pos, POLYGON(...));
 ```
 
-## Plugins (opcional)
+## Plugins
 
-Para habilitar full-text/vectorial, colocar los wheels en `./plugins` y arrancar
-con `SOUPDB_PLUGINS=1`:
+El servicio `plugins` instala los paquetes **desde PyPI** en el volumen
+`plugin-site` antes de que arranque el motor (requiere que las versiones estén
+publicadas; ver `plugins-release.yml` en el repo del gestor). El motor los descubre solo por
+sus entry points `soupdb.plugins` (no hace falta configurar nada).
 
-```bash
-mkdir -p plugins
-# copiar soupdb_inverted-*.whl y/o soupdb_vector-*.whl
-SOUPDB_PLUGINS=1 docker compose up -d
+- Por defecto se instala **`soupdb-inverted`** (full-text, ligero).
+- Para habilitar también el vectorial (numpy/opencv/librosa, ~1 GB):
+
+  ```bash
+  SOUPDB_EXTRA_PLUGINS=soupdb-vector docker compose up -d
+  ```
+
+- Verificación:
+
+  ```bash
+  docker compose logs plugins   # lista el entry point INVERTED (y IVF/HNSW)
+  ```
+
+Con los plugins activos se pueden usar las búsquedas del gestor:
+
+```sql
+CREATE INDEX idx ON papers (titulo) USING INVERTED;
+SELECT id, SCORE() FROM papers WHERE SEARCH(titulo, 'espaciales') USING INVERTED LIMIT 10;
 ```
 
 ## Persistencia y reinicio
