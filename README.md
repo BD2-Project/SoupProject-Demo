@@ -8,10 +8,10 @@ en GHCR.
 
 | Servicio   | Imagen                                      | Puerto host | Qué hace |
 |------------|---------------------------------------------|-------------|----------|
-| `engine`   | `ghcr.io/BD2-Project/soupdb:0.7.0`         | `55432`     | Gestor SoupDB (protocolo binario v2) |
-| `soupchef` | `ghcr.io/BD2-Project/soupchef:0.3.0`       | `8080`      | Cliente web SSR; el servidor Node habla TCP con el motor |
-| `seed`     | `ghcr.io/BD2-Project/soupdb:0.7.0`         | —           | Siembra idempotente de datos de ejemplo y termina |
-| `plugins`  | `python:3.12-slim`                          | —           | Instala `soupdb-inverted` (y extras) desde PyPI y termina |
+| `engine`   | `ghcr.io/bd2-project/soupdb:0.7.1`         | `55432`     | Gestor SoupDB (protocolo binario v2) |
+| `soupchef` | `ghcr.io/bd2-project/soupchef:0.3.0`       | `8080`      | Cliente web SSR; el servidor Node habla TCP con el motor |
+| `seed`     | `ghcr.io/bd2-project/soupdb:0.7.1`         | —           | Siembra datos y activa INVERTED (+ IVF/HNSW si están instalados) |
+| `plugins`  | `python:3.12-slim`                          | —           | Instala plugins desde PyPI (`soupdb-inverted` + extras) |
 
 ## Prerrequisitos
 
@@ -30,9 +30,20 @@ docker compose up -d
 - Cliente web: <http://localhost:8080>
 - Gestor (protocolo binario): `127.0.0.1:55432`
 
-El arranque sigue este orden: `seed` → `engine` (healthy) → `soupchef`.
+El arranque sigue este orden: `plugins` → `seed` → `engine` (healthy) → `soupchef`.
 La primera vez se crean las tablas `accounts` y `lugares` con datos de ejemplo;
 en arranques posteriores el seed detecta los datos y no hace nada.
+
+### Con la extensión vectorial (IVF/HNSW)
+
+```bash
+export SOUPDB_EXTRA_PLUGINS=soupdb-vector
+docker compose down -v      # opcional: empezar de cero
+docker compose up -d
+```
+
+El servicio `plugins` instala `soupdb-vector` desde PyPI y el seed activa
+`IVF`/`HNSW` automáticamente (misma configuración, requisito de v0.7.1).
 
 ## Verificación rápida
 
@@ -85,7 +96,7 @@ El servicio `plugins` instala los paquetes **desde PyPI** en el volumen
 sus entry points `soupdb.plugins`.
 
 - Por defecto se instala **`soupdb-inverted`** (full-text, ligero).
-- El **seed activa** el plugin por SQL en el primer arranque:
+- El **seed activa** los plugins por SQL en el primer arranque (idempotente):
 
   ```sql
   CREATE EXTENSION inverted WITH (storage_root = '/app/data/plugins/inverted');
@@ -97,7 +108,7 @@ sus entry points `soupdb.plugins`.
 - Verificación:
 
   ```bash
-  docker compose logs plugins   # lista el entry point INVERTED
+  docker compose logs plugins   # entry points instalados
   docker compose logs seed      # "plugin INVERTED activado e indice idx_docs creado"
   ```
 
@@ -107,22 +118,60 @@ Búsqueda lista para probar desde el cliente web:
 SELECT id, SCORE() AS score FROM docs WHERE SEARCH(contenido, 'espaciales') USING INVERTED LIMIT 10;
 ```
 
-### Vectorial (opcional, activación manual)
+### Vectorial (IVF/HNSW)
 
-Se instala con:
+El paquete `soupdb-vector` agrega los plugins **IVF** y **HNSW**. Para
+instalarlo y activarlo:
 
 ```bash
-SOUPDB_EXTRA_PLUGINS=soupdb-vector docker compose up -d
+export SOUPDB_EXTRA_PLUGINS=soupdb-vector
+docker compose up -d --force-recreate plugins seed
+docker compose restart engine   # el motor descubre los plugins al abrir
 ```
 
-Sus entry points (`IVF`, `HNSW`) quedan visibles, pero **no se activan solos**:
-crear un índice vectorial requiere un codebook/perfil entrenado sobre un dataset
-multimedia. Ese flujo queda fuera de la demo; ver `docs/plugins.md` y
-`docs/vectores.md` del repositorio del gestor.
+El seed detecta que el paquete está instalado y activa ambos con la **misma
+configuración** (en v0.7.1, si IVF y HNSW están activos deben compartir el
+vectorizer):
+
+```sql
+CREATE EXTENSION ivf WITH (storage_root = '/app/data/plugins/vector');
+CREATE EXTENSION hnsw WITH (storage_root = '/app/data/plugins/vector');
+```
+
+Verificación:
+
+```bash
+docker compose logs seed   # "seed: extensiones vectoriales IVF/HNSW activadas"
+```
+
+```sql
+SELECT plugin_name FROM SysPlugins;   -- INVERTED, IVF, HNSW
+```
+
+> La activación deja las extensiones listas, pero **crear un índice vectorial
+> requiere un perfil multimedia** (`profiles`) con un `codebook.npz` y el
+> dataset de imágenes/audio montado en el contenedor. Ese flujo no viene
+> incluido en la demo. Para configurarlo (desde `soupdb-vector 0.1.1`):
+>
+> ```sql
+> CREATE EXTENSION ivf WITH (
+>   storage_root = '/app/data/plugins/vector',
+>   profiles = '{"img-v1": {"kind": "image", "root": "/datasets/img", "codebook": "/codebooks/img.npz"}}'
+> );
+> CREATE EXTENSION hnsw WITH (
+>   storage_root = '/app/data/plugins/vector',
+>   profiles = '{"img-v1": {"kind": "image", "root": "/datasets/img", "codebook": "/codebooks/img.npz"}}'
+> );
+> ```
+>
+> Ambos deben repetir **exactamente** la misma configuración. Como el seed no
+> pisa una extensión ya activa, esta configuración persiste entre arranques.
+> Ver `docs/plugins.md` y `docs/sql_texto_multimedia.md` del repo del gestor.
 
 ## Persistencia y reinicio
 
-Los datos viven en el volumen `engine-data`. Para empezar de cero:
+Los datos viven en el volumen `engine-data` y los plugins instalados en
+`plugin-site`. Para empezar de cero:
 
 ```bash
 docker compose down -v
@@ -143,8 +192,10 @@ docker compose up -d
 
 ## Estado de las imágenes
 
-- `ghcr.io/BD2-Project/soupdb:0.7.0` — gestor; pin explícito por reproducibilidad.
-  Manifiesto multi-arch (`linux/amd64` + `linux/arm64`); `latest` también se
-  publica en cada release `v*`.
-- `ghcr.io/BD2-Project/soupchef:0.3.0` — cliente SSR con driver del protocolo
+- `ghcr.io/bd2-project/soupdb:0.7.1` — gestor; pin explícito por
+  reproducibilidad. Manifiesto multi-arch (`linux/amd64` + `linux/arm64`);
+  `latest` también se publica en cada release `v*`. Incluye el fix de v0.7.1:
+  `CREATE EXTENSION ivf WITH (storage_root = ...)` ya no choca con los plugins
+  vectoriales solo descubiertos, y `profiles` acepta JSON.
+- `ghcr.io/bd2-project/soupchef:0.3.0` — cliente SSR con driver del protocolo
   v1.1 en el servidor; multi-arch (`linux/amd64` + `linux/arm64`).

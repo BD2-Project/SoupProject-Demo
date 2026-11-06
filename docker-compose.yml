@@ -3,7 +3,7 @@ name: soupdb-demo
 services:
   engine:
     # Pin explícito por reproducibilidad; el manifiesto es multi-arch.
-    image: ghcr.io/BD2-Project/soupdb:0.7.0
+    image: ghcr.io/bd2-project/soupdb:0.7.1
     environment:
       PAGE_SIZE: ${PAGE_SIZE:-4096}
       BUFFER_POOL_SIZE: ${BUFFER_POOL_SIZE:-1024}
@@ -54,10 +54,12 @@ services:
   # Siembra idempotente de datos de ejemplo antes de que arranque el motor.
   # Usa la misma imagen del gestor y escribe en el volumen compartido.
   seed:
-    image: ghcr.io/BD2-Project/soupdb:0.7.0
+    image: ghcr.io/bd2-project/soupdb:0.7.1
     entrypoint: ["python", "-c"]
     command:
       - |
+        import importlib.metadata as md
+
         from engine.common.catalog import Catalog
         from engine.query import execute_sql
 
@@ -78,10 +80,28 @@ services:
         # Activacion por SQL (equivalente a CREATE EXTENSION de Postgres):
         # persiste la config en SysPlugins y el motor la reaplica al abrir.
         cat = Catalog("/app/data")
-        execute_sql(
-            "CREATE EXTENSION inverted WITH (storage_root = '/app/data/plugins/inverted')",
-            cat,
-        )
+        active = {row[0] for row in execute_sql("SELECT plugin_name FROM SysPlugins", cat).rows}
+        if "INVERTED" not in active:
+            execute_sql(
+                "CREATE EXTENSION inverted WITH (storage_root = '/app/data/plugins/inverted')",
+                cat,
+            )
+        installed = {ep.name for ep in md.entry_points(group="soupdb.plugins")}
+        if {"ivf", "hnsw"} <= installed:
+            # Misma config para ambos: comparten el vectorizer (v0.7.1+).
+            if "IVF" not in active:
+                execute_sql(
+                    "CREATE EXTENSION ivf WITH (storage_root = '/app/data/plugins/vector')",
+                    cat,
+                )
+            if "HNSW" not in active:
+                execute_sql(
+                    "CREATE EXTENSION hnsw WITH (storage_root = '/app/data/plugins/vector')",
+                    cat,
+                )
+            print("seed: extensiones vectoriales IVF/HNSW activadas")
+        else:
+            print("seed: soupdb-vector no instalado; se omite IVF/HNSW")
         if "docs" not in cat.tables():
             execute_sql("CREATE TABLE docs (id INT, contenido TEXT)", cat)
             execute_sql("INSERT INTO docs VALUES (1, 'bases de datos espaciales')", cat)
@@ -103,7 +123,7 @@ services:
 
   # Cliente web SSR: el servidor Node habla el protocolo binario con el motor.
   soupchef:
-    image: ghcr.io/BD2-Project/soupchef:0.3.0
+    image: ghcr.io/bd2-project/soupchef:0.3.0
     ports:
       - "${SOUPCHEF_PORT:-8080}:3000"
     environment:
