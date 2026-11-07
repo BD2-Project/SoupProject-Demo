@@ -54,6 +54,23 @@ docker compose logs seed          # "seed: tablas accounts y lugares creadas"
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/   # 200
 ```
 
+## Cargar datos de prueba
+
+Script incluido: crea `productos` (120), `ventas` (600) y `estaciones` (80) con
+datos falsos, y sus índices. Es idempotente (no duplica si ya hay filas).
+
+```bash
+pip install soupdb                       # solo el core, para el protocolo
+python scripts/load_demo_data.py         # defaults: 120/600/80
+python scripts/load_demo_data.py --products 5000 --sales 20000 --stations 2000 --docs 500
+```
+
+El gestor debe estar accesible en `127.0.0.1:55432` (o usar `--host`/`--port`).
+
+> Nota: el motor parsea `JOIN` pero el planner actual **no lo ejecuta**; usa
+> agregados por tabla o consultas separadas. Tampoco soporta `tabla.columna`
+> calificado.
+
 ## Datos de ejemplo
 
 ```sql
